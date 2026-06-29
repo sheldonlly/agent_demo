@@ -129,7 +129,10 @@ class RAG_Manager:
     def clear(self) -> None:
         try:
             self.vector_db.delete_collection()
-            self._vector_db = None
+            self.vector_db.create_collection(
+                collection_name=self.collection_name,
+                size=self.vector_size,
+            )
         except Exception as e:
             logger.warning("clear RAG vector_db failed: %s", e)
         if os.path.exists(self._documents_path):

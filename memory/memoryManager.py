@@ -15,6 +15,8 @@ class MemoryManager:
     # ── recording ──────────────────────────────────────────────────────
 
     def record_interaction(self, query: str, response: str) -> None:
+        if not query or not response:
+            return
         self.work.add(f"Q: {query}\nA: {response[:500]}", {"type": "interaction"})
         self.episodic.add(f"User: {query}\nAssistant: {response[:1000]}", {"type": "conversation"})
         logger.debug("recorded interaction | query_len=%d resp_len=%d", len(query), len(response))

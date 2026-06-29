@@ -1,12 +1,19 @@
-from authlib.oauth2.rfc7523 import client
-from langchain_mcp_adapters.client import MultiServerMCPClient
 import asyncio
+import sys
+from pathlib import Path
+
+_proj_root = str(Path(__file__).resolve().parent.parent)
+if _proj_root not in sys.path:
+    sys.path.insert(0, _proj_root)
+
+import log.logconfig  # noqa: F401
+from langchain_mcp_adapters.client import MultiServerMCPClient
 
 client = MultiServerMCPClient({
     "sheldonMCPServer": {
         "transport": "stdio",
         "command": "python",
-        "args": ["E:\PycharmProjects\demo\MCPServer.py"]
+        "args": ["E:\PycharmProjects\demo\tools\MCPServer.py"]
     },
     "gaodeMCPServer": {
         "transport": "http",

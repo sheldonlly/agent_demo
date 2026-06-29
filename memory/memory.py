@@ -27,7 +27,7 @@ class BaseMemory:
     # ── public API ────────────────────────────────────────────────────
 
     def add(self, content: str, metadata: dict | None = None) -> None:
-        if not content:
+        if not content or not content.strip():
             logger.warning("[%s] refusing empty content", self.name)
             return
         item = MemoryItem(content=content, metadata=metadata or {})
