@@ -145,3 +145,118 @@ agent.py → logging          (通过 log/logconfig 自动配置)
 - [ ] 增加 agent registry，支持根据配置字符串动态选择 Agent 类型
 - [ ] 增加 Graphviz / Mermaid 可视化
 - [ ] 增加更多 Agent 模式（如 Reflexion、Tree-of-Thought、Multi-Agent）
+
+---
+
+## 第二轮修改：日志系统 + 失败处理 + 工具调用修复
+
+### 触发原因
+
+第一次提交的代码在测试中暴露了三个问题：
+
+1. **ReAct 工具调用不生效**：`_call_agent` 使用 `REACT_PROMPT`（文本格式，引导模型输出"行动：get_weather"），但 `_route` 检查的是 `AIMessage.tool_calls` 属性——两者完全不匹配，工具永远不会被调用
+2. **中间过程不可见**：除 `run()` 出了异常会记录外，LLM 说了什么、调了什么工具、路由去了哪里，完全看不见
+3. **失败场景裸奔**：LLM API 抛异常直接让 `StateGraph.invoke()` 崩溃；`messages[0].content` 在消息列表为空时直接 AttributeError；Reflection 评审结果不含 PASS/FAIL 时路由无法决策
+
+### 修改内容
+
+#### 1. ReAct 工具调用机制重写
+
+```text
+旧方案：REACT_PROMPT(文本格式) + model.invoke()            → ❌ 无 tool_calls
+新方案：model.bind_tools(tools) + 简洁 SystemPrompt         → ✅ 正确输出 tool_calls
+```
+
+关键改动：
+
+- 构造函数中绑定工具：`self._bound = self.model.bind_tools(self.tools)`
+- 系统提示词替换为简洁版本（`_REACT_SYSTEM_PROMPT`），不再要求文本格式输出
+- LLM 返回的 `tool_calls` 由模型原生驱动，路由据此决策
+
+#### 2. 全链路日志体系
+
+每个 Agent 的每个节点都按统一规范记录日志，共分四个级别：
+
+| 级别 | 场景 | 示例 |
+|------|------|------|
+| `INFO` | 生命周期事件 | `[ReActDemo] init`, `[ReActDemo] run`, `[ReActDemo] done` |
+| `INFO` | 关键决策点 | `tool_calls=[get_weather]`, `score=8 | PASS=True` |
+| `DEBUG` | 过程跟踪 | `route → continue (tools pending)`, `route → end (final answer)` |
+| `WARNING` | 异常但不崩溃 | 空 steps、空 draft、类型意外、iter 耗尽 |
+| `ERROR` | 不可恢复异常 | LLM API 调用失败（记录后继续执行） |
+
+日志格式为 `[AgentName] event | key=value`，方便 `grep` 过滤。
+
+#### 3. 失败场景覆盖
+
+| 场景 | 处理方式 |
+|------|----------|
+| LLM API 超时/报错 | `try/except` 捕获，返回 `AIMessage(content="[LLM error: ...]")`，不走工具路径 |
+| 工具执行异常 | 捕获后返回 `ToolMessage(content="Error: ...")`，不影响其他工具 |
+| 模型返回空 content | `str(resp.content) if resp and resp.content else ""` |
+| 消息列表为空 | `state.get("messages", [])` |
+| Reflection 草稿为空 | 跳过评审，默认 PASS |
+| Plan 解析出 0 个步骤 | 使用原始文本作为 1 个步骤 |
+| 状态中缺少字段 | `state.get("field", default)` |
+
+#### 4. PlanAndSolveAgent 步数控制
+
+```python
+def __init__(self, ..., max_steps: int = 5):
+    self.max_steps = max_steps
+```
+
+- 自定义 `_plan_prompt` 模板，引导 LLM 生成 `3 ~ max_steps` 个步骤
+- `_parse_steps` 解析后如果超过 `max_steps` 则截断
+- 默认 `max_steps=5` 使总 LLM 调用数控制在 7 次以内（1 plan + 5 solve + 1 refine），约 3.5 分钟可完成
+- 消除了未提供 `max_steps` 时 LLM 生成 7~8 步导致超时的问题
+
+#### 5. __main__ 健壮化
+
+```python
+# 1. LLM 初始化失败检测
+try:
+    llm = LLM().llm
+except Exception as e:
+    raise SystemExit(1)   # 明确退出
+
+# 2. 每个测试独立 try/except
+for label, factory, query in test_cases:
+    try:
+        agent = factory()
+        result = agent.run(query)
+    except Exception as e:
+        print(f"[FAIL] {label}: {e}")   # 继续执行后续测试
+```
+
+#### 6. 模块导入修复
+
+在文件顶部添加：
+
+```python
+_proj_root = str(Path(__file__).resolve().parent.parent)
+if _proj_root not in sys.path:
+    sys.path.insert(0, _proj_root)
+```
+
+使 `from prompt import ...` 在任意工作目录下都能正确解析。
+
+### 测试结果（实际运行）
+
+```text
+Test: ReActAgent        ✅ 调用 get_weather(city="北京") → "晴朗，25°C"
+Test: ReflectionAgent   ✅ 草稿 → 评分 8/10 PASS → 返回最终答案
+Test: PlanAndSolveAgent ✅ 5步计划 → 逐步执行 → 润色输出 1873 字符
+```
+
+三个用例均通过，总耗时约 5 分钟（受 LLM API 响应速度影响）。
+
+### 关键设计决策（补充）
+
+| 决策 | 选择 | 理由 |
+|------|------|------|
+| 工具调用方式 | `bind_tools` + 简洁 SystemPrompt | 模型原生 `tool_calls` 比文本解析更可靠，且兼容 OpenAI 函数调用标准 |
+| 日志级别划分 | INFO 报进展，DEBUG 报路由 | 日常运行只看 INFO 即可了解全貌，DEBUG 供调试时开启 |
+| 失败恢复策略 | 写入错误消息到 message 列表继续执行 | 保持 StateGraph 节点的纯函数特性，避免在 node 内部抛出异常 |
+| Plan 步数上限 | 构造函数参数 `max_steps`，默认 5 | 平衡回答质量与执行时间，用户可调 |
+| sys.path 修正 | 文件顶部一次插入 | 避免 `__main__` 中临时修改导致的导入时序问题 |
