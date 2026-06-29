@@ -1,13 +1,8 @@
 from langchain.chat_models import init_chat_model
-from pydantic import BaseModel
-from dotenv import load_dotenv
-from langchain_core.language_models import BaseChatModel
 import os
 import logging
 logger = logging.getLogger(__name__)
-
-from pydantic.v1 import create_model
-
+from dotenv import load_dotenv
 load_dotenv()
 
 class LLM():
@@ -43,11 +38,11 @@ class LLM():
 
         return self.llm
 
-    def run_llm(self, message: str):
+    def run(self, message: str):
         response = self.llm.invoke(message)
         return response
 
-    def run_llm_stream(self, message: str):
+    def stream(self, message: str):
         response = self.llm.stream(message)
         for chunk in response:
             yield chunk
@@ -55,6 +50,6 @@ class LLM():
 if __name__ == "__main__":
     print("test LLM")
     my_llm = LLM()
-    response = my_llm.run_llm_stream("你好，请你帮我写一个生日计划的plan")
+    response = my_llm.stream("你好，请你帮我写一个生日计划的plan")
     for chunk in response:
         print(chunk.content, end="", flush=True)
