@@ -31,6 +31,9 @@ from prompt import (
     REFINE_PROMPT,
 )
 
+# ── use project-level logging config (console + file) ──
+import log.logconfig   # noqa: F811  (triggers setup_log() at import time)
+
 logger = logging.getLogger(__name__)
 
 _REACT_SYSTEM_PROMPT = (
@@ -574,9 +577,6 @@ if __name__ == "__main__":
     from tools.tools import get_weather, caculate
 
     load_dotenv()
-
-    log_format = "%(asctime)s | %(name)s | %(levelname)-5s | %(message)s"
-    logging.basicConfig(level=logging.INFO, format=log_format, force=True)
 
     try:
         llm = LLM().llm
